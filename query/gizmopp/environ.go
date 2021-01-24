@@ -90,46 +90,45 @@ func (g *graphObject) Emit(call goja.FunctionCall) goja.Value {
 }
 
 var defaultEnv = map[string]func(vm *goja.Runtime, call goja.FunctionCall) goja.Value{
-	"type": q1value(func(s quad.Value) string {
-		switch s.(type) {
-		case quad.IRI:
-			return "iri"
-		case quad.BNode:
-			return "bnode"
-		case quad.String:
-			return "str"
-		case quad.Int:
-			return "int"
-		case quad.Float:
-			return "float"
-		case quad.Bool:
-			return "bool"
-		case quad.Time:
-			return "date"
-		case quad.LangString:
-			return "lang"
-		case quad.TypedString:
-			return "typed"
-		default:
-			return "unknown"
-		}
-	}),
-
+	"type": q1value(typeCheck),
 	"iri":   s1string(func(s string) quad.Value { return quad.IRI(s) }),
 	"bnode": s1string(func(s string) quad.Value { return quad.BNode(s) }),
 	"str":   s1string(func(s string) quad.Value { return quad.String(s) }),
-
 	"int":   s1int(func(s int64) quad.Value { return quad.Int(s) }),
 	"float": s1float(func(s float64) quad.Value { return quad.Float(s) }),
 	"bool":  s1bool(func(s bool) quad.Value { return quad.Bool(s) }),
 	"date":  s1date(func(s time.Time) quad.Value { return quad.Time(s) }),
-
 	"lang": s1string۰s2string(func(s, lang string) quad.Value {
 		return quad.LangString{Value: quad.String(s), Lang: lang}
 	}),
 	"typed": s1string۰q1iri(func(s string, typ quad.IRI) quad.Value {
 		return quad.TypedString{Value: quad.String(s), Type: typ}
 	}),
+}
+
+func typeCheck(s quad.Value) string {
+	switch s.(type) {
+	case quad.IRI:
+		return "iri"
+	case quad.BNode:
+		return "bnode"
+	case quad.String:
+		return "str"
+	case quad.Int:
+		return "int"
+	case quad.Float:
+		return "float"
+	case quad.Bool:
+		return "bool"
+	case quad.Time:
+		return "date"
+	case quad.LangString:
+		return "lang"
+	case quad.TypedString:
+		return "typed"
+	default:
+		return "unknown"
+	}
 }
 
 func q1value(fn func(q1 quad.Value) string) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {

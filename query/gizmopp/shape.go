@@ -32,6 +32,22 @@ func (r filterCallback) BuildIterator(qs graph.QuadStore, it graph.Iterator) gra
 	})
 }
 
+type filterTypes struct {
+	types []string
+}
+
+func (r filterTypes) BuildIterator(qs graph.QuadStore, it graph.Iterator) graph.Iterator {
+	return iterator.NewValueFilter(qs, it, func(val quad.Value) (bool, error) {
+		vt := typeCheck(val)
+		for _, typ := range r.types {
+			if vt == typ {
+				return true, nil
+			}
+		}
+		return false, errUnknownType{Val: vt}
+	})
+}
+
 var _ shape.ValueMapper = mapperCallback{}
 
 type mapperCallback struct {

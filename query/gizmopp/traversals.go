@@ -582,6 +582,23 @@ func (p *pathObject) Compare(call goja.FunctionCall) goja.Value {
 	return p.newVal(np)
 }
 
+// Type applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Type(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) == 0 {
+		panic(p.s.vm.ToValue(errArgCount{Got: len(args)}))
+	}
+
+	np := p.clonePath().Filters(filterTypes{types: toStrings(args)})
+	return p.newVal(np)
+}
+
+// Type applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Literal(_ goja.FunctionCall) goja.Value {
+	np := p.clonePath().Filters(filterTypes{types: []string{"str", "int", "float", "bool", "date", "lang", "typed"}})
+	return p.newVal(np)
+}
+
 // Map calls callback(data) for each result.
 // Signature: (callback)
 //
