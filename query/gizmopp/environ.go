@@ -4,7 +4,6 @@ package gizmopp
 
 import (
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/dop251/goja"
@@ -12,9 +11,7 @@ import (
 	"github.com/cayleygraph/quad"
 	"github.com/cayleygraph/quad/voc"
 
-	"github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/graph/path"
-	"github.com/cayleygraph/cayley/graph/shape"
 )
 
 // graphObject is a root graph object.
@@ -133,13 +130,6 @@ var defaultEnv = map[string]func(vm *goja.Runtime, call goja.FunctionCall) goja.
 	"typed": s1string۰q1iri(func(s string, typ quad.IRI) quad.Value {
 		return quad.TypedString{Value: quad.String(s), Type: typ}
 	}),
-
-	"lt":    cmpOpType(iterator.CompareLT),
-	"lte":   cmpOpType(iterator.CompareLTE),
-	"gt":    cmpOpType(iterator.CompareGT),
-	"gte":   cmpOpType(iterator.CompareGTE),
-	"regex": cmpRegexp,
-	"like":  cmpWildcard,
 }
 
 func q1value(fn func(q1 quad.Value) string) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
@@ -241,90 +231,6 @@ func s1string۰q1iri(fn func(s1 string, q1 quad.IRI) quad.Value) func(vm *goja.R
 
 		return vm.ToValue(fn(args[0], vt))
 	}
-}
-
-func cmpOpType(op iterator.Operator) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-		args := exportArgs(call.Arguments)
-		if len(args) != 1 {
-			panic(vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
-		}
-		qv, err := toQuadValue(args[0])
-		if err != nil {
-			panic(vm.ToValue(err))
-		}
-		return vm.ToValue(valFilter{f: shape.Comparison{Op: op, Val: qv}})
-	}
-}
-
-func cmpWildcard(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-	args := exportArgs(call.Arguments)
-	if len(args) != 1 {
-		panic(vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
-	}
-	pattern, ok := args[0].(string)
-	if !ok {
-		panic(vm.ToValue(errType{Expected: "", Got: args[0]}))
-	}
-	return vm.ToValue(valFilter{f: shape.Wildcard{Pattern: pattern}})
-}
-
-func cmpRegexp(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-	args := exportArgs(call.Arguments)
-	if len(args) != 1 && len(args) != 2 {
-		panic(vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
-	}
-	v, err := toQuadValue(args[0])
-	if err != nil {
-		panic(vm.ToValue(err))
-	}
-	allowRefs := false
-	if len(args) > 1 {
-		b, ok := args[1].(bool)
-		if !ok {
-			panic(vm.ToValue(errType{Expected: true, Got: args[1]}))
-		}
-		allowRefs = b
-	}
-	switch vt := v.(type) {
-	case quad.String:
-		if allowRefs {
-			v = quad.IRI(vt)
-		}
-	case quad.IRI:
-		if !allowRefs {
-			panic(vm.ToValue(errRegexpOnIRI))
-		}
-	case quad.BNode:
-		if !allowRefs {
-			panic(vm.ToValue(errRegexpOnIRI))
-		}
-	default:
-		panic(vm.ToValue(errUnknownType{Val: v}))
-	}
-	var (
-		s    string
-		refs bool
-	)
-	switch v := v.(type) {
-	case quad.String:
-		s = string(v)
-	case quad.IRI:
-		s, refs = string(v), true
-	case quad.BNode:
-		s, refs = string(v), true
-	default:
-		panic(vm.ToValue(errUnknownType{Val: v}))
-	}
-	re, err := regexp.Compile(s)
-	if err != nil {
-		panic(vm.ToValue(err))
-	}
-	return vm.ToValue(valFilter{f: shape.Regexp{Re: re, Refs: refs}})
-}
-
-type valFilter struct {
-	f shape.ValueFilter
 }
 
 func unwrap(o interface{}) interface{} {
