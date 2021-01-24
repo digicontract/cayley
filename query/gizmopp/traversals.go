@@ -4,11 +4,15 @@ package gizmopp
 // build the chain of objects, and won't often need the session.
 
 import (
+	"regexp"
+
+	"github.com/cayleygraph/quad"
 	"github.com/dop251/goja"
 
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/graph/path"
+	"github.com/cayleygraph/cayley/graph/shape"
 )
 
 // pathObject is a Path object in Gizmo.
@@ -481,6 +485,100 @@ func (p *pathObject) Filter(call goja.FunctionCall) goja.Value {
 	}
 
 	np := p.clonePath().Filters(filterCallback{sess: p.s, call: call, fn: fn})
+	return p.newVal(np)
+}
+
+// Regex applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Regex(call goja.FunctionCall) goja.Value {
+	if n := len(call.Arguments); n != 1 && n != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(call.Arguments)}))
+	}
+
+	args := exportArgs(call.Arguments)
+	v, err := toQuadValue(args[0])
+	if err != nil {
+		panic(p.s.vm.ToValue(err))
+	}
+	allowRefs := false
+	if len(args) > 1 {
+		b, ok := args[1].(bool)
+		if !ok {
+			panic(p.s.vm.ToValue(errType{Expected: true, Got: args[1]}))
+		}
+		allowRefs = b
+	}
+	switch vt := v.(type) {
+	case quad.String:
+		if allowRefs {
+			v = quad.IRI(vt)
+		}
+	case quad.IRI:
+		if !allowRefs {
+			panic(p.s.vm.ToValue(errRegexpOnIRI))
+		}
+	case quad.BNode:
+		if !allowRefs {
+			panic(p.s.vm.ToValue(errRegexpOnIRI))
+		}
+	default:
+		panic(p.s.vm.ToValue(errUnknownType{Val: v}))
+	}
+	var (
+		s    string
+		refs bool
+	)
+	switch v := v.(type) {
+	case quad.String:
+		s = string(v)
+	case quad.IRI:
+		s, refs = string(v), true
+	case quad.BNode:
+		s, refs = string(v), true
+	default:
+		panic(p.s.vm.ToValue(errUnknownType{Val: v}))
+	}
+	re, err := regexp.Compile(s)
+	if err != nil {
+		panic(p.s.vm.ToValue(err))
+	}
+
+	np := p.clonePath().Filters(shape.Regexp{Re: re, Refs: refs})
+	return p.newVal(np)
+}
+
+// Like applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Like(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 1 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
+	}
+	pattern, ok := args[0].(string)
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: "", Got: args[0]}))
+	}
+
+	np := p.clonePath().Filters(shape.Wildcard{Pattern: pattern})
+	return p.newVal(np)
+}
+
+// Compare applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Compare(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 2, Got: len(args)}))
+	}
+
+	op, ok := toInt(args[0])
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: 1, Got: op}))
+	}
+
+	qv, err := toQuadValue(args[1])
+	if err != nil {
+		panic(p.s.vm.ToValue(err))
+	}
+
+	np := p.clonePath().Filters(shape.Comparison{Op: iterator.Operator(op), Val: qv})
 	return p.newVal(np)
 }
 
