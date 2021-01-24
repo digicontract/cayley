@@ -6,10 +6,11 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/cayleygraph/quad"
+
 	"github.com/cayleygraph/cayley/clog"
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/iterator"
-	"github.com/cayleygraph/quad"
 )
 
 var (
@@ -281,6 +282,45 @@ func (s Except) Optimize(r Optimizer) (Shape, bool) {
 		return AllNodes{}, true
 	} else if _, ok := s.Exclude.(AllNodes); ok {
 		return nil, true
+	}
+	return s, opt
+}
+
+// ValueMapper is an interface for iterator wrappers that can map node values.
+type ValueMapper interface {
+	BuildIterator(qs graph.QuadStore, it graph.Iterator) graph.Iterator
+}
+
+// Mapper maps all values from the source using a list of operations.
+type Mapper struct {
+	From    Shape         // source that will be mapped
+	Mappers []ValueMapper // maps to apply
+}
+
+func (s Mapper) BuildIterator(qs graph.QuadStore) graph.Iterator {
+	if IsNull(s.From) {
+		return iterator.NewNull()
+	}
+	it := s.From.BuildIterator(qs)
+	for _, f := range s.Mappers {
+		it = f.BuildIterator(qs, it)
+	}
+	return it
+}
+func (s Mapper) Optimize(r Optimizer) (Shape, bool) {
+	if IsNull(s.From) {
+		return nil, true
+	}
+	var opt bool
+	s.From, opt = s.From.Optimize(r)
+	if r != nil {
+		ns, nopt := r.OptimizeShape(s)
+		return ns, opt || nopt
+	}
+	if IsNull(s.From) {
+		return nil, true
+	} else if len(s.Mappers) == 0 {
+		return s.From, true
 	}
 	return s, opt
 }

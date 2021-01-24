@@ -3,9 +3,10 @@ package shape
 import (
 	"context"
 
+	"github.com/cayleygraph/quad"
+
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/iterator"
-	"github.com/cayleygraph/quad"
 )
 
 func IntersectShapes(s1, s2 Shape) Shape {
@@ -230,6 +231,25 @@ func AddFilters(nodes Shape, filters ...ValueFilter) Shape {
 	return Filter{
 		From:    nodes,
 		Filters: filters,
+	}
+}
+
+func AddMappers(nodes Shape, mappers ...ValueMapper) Shape {
+	if len(mappers) == 0 {
+		return nodes
+	}
+	if s, ok := nodes.(Mapper); ok {
+		arr := make([]ValueMapper, 0, len(s.Mappers)+len(mappers))
+		arr = append(arr, s.Mappers...)
+		arr = append(arr, mappers...)
+		return Mapper{From: s.From, Mappers: arr}
+	}
+	if nodes == nil {
+		nodes = AllNodes{}
+	}
+	return Mapper{
+		From:    nodes,
+		Mappers: mappers,
 	}
 }
 

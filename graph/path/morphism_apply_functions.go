@@ -87,6 +87,17 @@ func filterMorphism(filt []shape.ValueFilter) morphism {
 	}
 }
 
+// mapperMorphism is the set of nodes that passes maps.
+func mapperMorphism(mappers []shape.ValueMapper) morphism {
+	return morphism{
+		Reversal: func(ctx *pathContext) (morphism, *pathContext) { return mapperMorphism(mappers), ctx },
+		Apply: func(in shape.Shape, ctx *pathContext) (shape.Shape, *pathContext) {
+			return shape.AddMappers(in, mappers...), ctx
+		},
+	}
+}
+
+
 // hasMorphism is the set of nodes that is reachable via either a *Path, a
 // single node.(string) or a list of nodes.([]string).
 func hasMorphism(via interface{}, rev bool, nodes ...quad.Value) morphism {

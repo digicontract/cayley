@@ -187,6 +187,13 @@ func (p *Path) Filters(filters ...shape.ValueFilter) *Path {
 	return np
 }
 
+// Maps represents the nodes that are passing provided mappings.
+func (p *Path) Maps(mappers ...shape.ValueMapper) *Path {
+	np := p.clone()
+	np.stack = append(np.stack, mapperMorphism(mappers))
+	return np
+}
+
 // Tag adds tag strings to the nodes at this point in the path for each result
 // path in the set.
 func (p *Path) Tag(tags ...string) *Path {
