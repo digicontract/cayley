@@ -240,7 +240,7 @@ func (l *loader) makePathForType(rt reflect.Type, tagPref string, rootOnly bool)
 							if alt == nil {
 								alt = ap
 							} else {
-								alt = alt.Or(ap)
+								alt = alt.Or(ap, false)
 							}
 						}
 					} else {
@@ -250,7 +250,7 @@ func (l *loader) makePathForType(rt reflect.Type, tagPref string, rootOnly bool)
 							if alt == nil {
 								alt = ap
 							} else {
-								alt = alt.Or(ap)
+								alt = alt.Or(ap, false)
 							}
 						}
 					}
@@ -273,7 +273,7 @@ func (l *loader) makePathForType(rt reflect.Type, tagPref string, rootOnly bool)
 		}
 	}
 	if allOptional {
-		p = p.And(alt.Unique())
+		p = p.And(alt.Unique(), false)
 	}
 	if tagPref != "" {
 		return p, nil

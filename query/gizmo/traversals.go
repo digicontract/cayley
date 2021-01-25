@@ -284,7 +284,7 @@ func (p *pathObject) Intersect(path *pathObject) *pathObject {
 	if path == nil {
 		return p
 	}
-	np := p.clonePath().And(path.path)
+	np := p.clonePath().And(path.path, false)
 	return p.new(np)
 }
 
@@ -304,7 +304,7 @@ func (p *pathObject) Union(path *pathObject) *pathObject {
 	if path == nil {
 		return p
 	}
-	np := p.clonePath().Or(path.path)
+	np := p.clonePath().Or(path.path, false)
 	return p.new(np)
 }
 
@@ -555,7 +555,7 @@ func (p *pathObject) Except(path *pathObject) *pathObject {
 	if path == nil {
 		return p
 	}
-	np := p.clonePath().Except(path.path)
+	np := p.clonePath().Except(path.path, false)
 	return p.new(np)
 }
 

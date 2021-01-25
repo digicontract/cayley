@@ -274,12 +274,28 @@ func (p *pathObject) FollowRecursive(call goja.FunctionCall) goja.Value {
 //	// People followed by both charlie (bob and dani) and dani (bob and greg) -- returns bob.
 //	cFollows.Intersect(dFollows).All()
 //	// Equivalently, g.V("<charlie>").Out("<follows>").And(g.V("<dani>").Out("<follows>")).All()
-func (p *pathObject) Intersect(path *pathObject) *pathObject {
-	if path == nil {
-		return p
+func (p *pathObject) Intersect(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 1 && len(args) != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
 	}
-	np := p.clonePath().And(path.path)
-	return p.new(np)
+
+	via, ok := args[0].(*path.Path)
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: &pathObject{}, Got: via}))
+	}
+
+	follow := false
+	if len(args) > 1 {
+		follow = toBool(args[1])
+	}
+
+	if via == nil {
+		return p.s.vm.ToValue(p)
+	}
+
+	np := p.clonePath().And(via, follow)
+	return p.newVal(np)
 }
 
 // Union returns the combined paths of the two queries.
@@ -295,12 +311,28 @@ func (p *pathObject) Intersect(path *pathObject) *pathObject {
 //	// People followed by both charlie (bob and dani) and dani (bob and greg)
 //	//	-- returns bob (from charlie), dani, bob (from dani), and greg.
 //	cFollows.Union(dFollows).All()
-func (p *pathObject) Union(path *pathObject) *pathObject {
-	if path == nil {
-		return p
+func (p *pathObject) Union(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 1 && len(args) != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
 	}
-	np := p.clonePath().Or(path.path)
-	return p.new(np)
+
+	via, ok := args[0].(*path.Path)
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: &pathObject{}, Got: via}))
+	}
+
+	follow := false
+	if len(args) > 1 {
+		follow = toBool(args[1])
+	}
+
+	if via == nil {
+		return p.s.vm.ToValue(p)
+	}
+
+	np := p.clonePath().Or(via, follow)
+	return p.newVal(np)
 }
 
 // Has filters all paths which are, at this point, on the subject for the given
@@ -350,29 +382,6 @@ func (p *pathObject) has(call goja.FunctionCall, rev bool) goja.Value {
 			panic(p.s.vm.ToValue(err))
 		}
 	}
-	// if len(args) > 0 {
-	// 	var filt []shape.ValueFilter
-	// loop:
-	// 	for _, a := range args {
-	// 		switch a := a.(type) {
-	// 		case valFilter:
-	// 			filt = append(filt, a.f)
-	// 		case []valFilter:
-	// 			for _, s := range a {
-	// 				filt = append(filt, s.f)
-	// 			}
-	// 		default:
-	// 			filt = nil
-	// 			// failed to collect all argument as filters - switch back to nodes-only mode
-	// 			break loop
-	// 		}
-	// 	}
-	// 	if len(filt) > 0 {
-	// 		np := p.clonePath()
-	// 		np = np.HasFilter(via, rev, filt...)
-	// 		return p.newVal(np)
-	// 	}
-	// }
 	qv, err := toQuadValues(args)
 	if err != nil {
 		panic(p.s.vm.ToValue(err))
@@ -400,12 +409,28 @@ func (p *pathObject) has(call goja.FunctionCall, rev bool) goja.Value {
 //	cFollows.Except(dFollows).All()
 // 	// The set (dani) -- what charlie follows that dani does not also follow.
 //	// Equivalently, g.V("<charlie>").Out("<follows>").Except(g.V("<dani>").Out("<follows>")).All()
-func (p *pathObject) Except(path *pathObject) *pathObject {
-	if path == nil {
-		return p
+func (p *pathObject) Except(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 1 && len(args) != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
 	}
-	np := p.clonePath().Except(path.path)
-	return p.new(np)
+
+	via, ok := args[0].(*path.Path)
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: &pathObject{}, Got: via}))
+	}
+
+	follow := false
+	if len(args) > 1 {
+		follow = toBool(args[1])
+	}
+
+	if via == nil {
+		return p.s.vm.ToValue(p)
+	}
+
+	np := p.clonePath().Except(via, follow)
+	return p.newVal(np)
 }
 
 // Unique removes duplicate values from the path.
@@ -595,7 +620,7 @@ func (p *pathObject) Type(call goja.FunctionCall) goja.Value {
 
 // Type applies constraints to a set of nodes. Can be used to filter values by range or match strings.
 func (p *pathObject) Literal(_ goja.FunctionCall) goja.Value {
-	np := p.clonePath().Filters(filterTypes{types: []string{"str", "int", "float", "bool", "date", "lang", "typed"}})
+	np := p.clonePath().Filters(filterTypes{types: []string{"str", "int", "float", "bool", "time", "lang", "typed"}})
 	return p.newVal(np)
 }
 

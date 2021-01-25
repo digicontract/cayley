@@ -18,10 +18,11 @@ import (
 	"context"
 	"regexp"
 
+	"github.com/cayleygraph/quad"
+
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/graph/shape"
-	"github.com/cayleygraph/quad"
 )
 
 type applyMorphism func(shape.Shape, *pathContext) (shape.Shape, *pathContext)
@@ -317,17 +318,17 @@ func (p *Path) SavePredicates(rev bool, tag string) *Path {
 
 // And updates the current Path to represent the nodes that match both the
 // current Path so far, and the given Path.
-func (p *Path) And(path *Path) *Path {
+func (p *Path) And(path *Path, follow bool) *Path {
 	np := p.clone()
-	np.stack = append(np.stack, andMorphism(path))
+	np.stack = append(np.stack, andMorphism(path, follow))
 	return np
 }
 
 // Or updates the current Path to represent the nodes that match either the
 // current Path so far, or the given Path.
-func (p *Path) Or(path *Path) *Path {
+func (p *Path) Or(path *Path, follow bool) *Path {
 	np := p.clone()
-	np.stack = append(np.stack, orMorphism(path))
+	np.stack = append(np.stack, orMorphism(path, follow))
 	return np
 }
 
@@ -337,9 +338,9 @@ func (p *Path) Or(path *Path) *Path {
 // For example:
 //  // Will return []string{"B"}
 //  StartPath(qs, "A", "B").Except(StartPath(qs, "A"))
-func (p *Path) Except(path *Path) *Path {
+func (p *Path) Except(path *Path, follow bool) *Path {
 	np := p.clone()
-	np.stack = append(np.stack, exceptMorphism(path))
+	np.stack = append(np.stack, exceptMorphism(path, follow))
 	return np
 }
 
@@ -493,7 +494,7 @@ func (p *Path) Back(tag string) *Path {
 				if x == tag {
 					// Found what we're looking for.
 					p.stack = p.stack[:i+1]
-					return p.And(newPath)
+					return p.And(newPath, false)
 				}
 			}
 		}

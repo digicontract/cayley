@@ -90,14 +90,14 @@ func (g *graphObject) Emit(call goja.FunctionCall) goja.Value {
 }
 
 var defaultEnv = map[string]func(vm *goja.Runtime, call goja.FunctionCall) goja.Value{
-	"type": q1value(typeCheck),
+	"type":  q1value(typeCheck),
 	"iri":   s1string(func(s string) quad.Value { return quad.IRI(s) }),
 	"bnode": s1string(func(s string) quad.Value { return quad.BNode(s) }),
 	"str":   s1string(func(s string) quad.Value { return quad.String(s) }),
 	"int":   s1int(func(s int64) quad.Value { return quad.Int(s) }),
 	"float": s1float(func(s float64) quad.Value { return quad.Float(s) }),
 	"bool":  s1bool(func(s bool) quad.Value { return quad.Bool(s) }),
-	"date":  s1date(func(s time.Time) quad.Value { return quad.Time(s) }),
+	"time":  s1date(func(s time.Time) quad.Value { return quad.Time(s) }),
 	"lang": s1string۰s2string(func(s, lang string) quad.Value {
 		return quad.LangString{Value: quad.String(s), Lang: lang}
 	}),
@@ -121,7 +121,7 @@ func typeCheck(s quad.Value) string {
 	case quad.Bool:
 		return "bool"
 	case quad.Time:
-		return "date"
+		return "time"
 	case quad.LangString:
 		return "lang"
 	case quad.TypedString:
@@ -321,6 +321,15 @@ func toFloats(objs []interface{}) []float64 {
 		}
 	}
 	return out
+}
+
+func toBool(o interface{}) bool {
+	switch o.(type) {
+	case bool:
+		return true
+	default:
+		return false
+	}
 }
 
 func toBools(objs []interface{}) []bool {

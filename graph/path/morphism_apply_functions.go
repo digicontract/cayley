@@ -17,10 +17,11 @@ package path
 import (
 	"fmt"
 
+	"github.com/cayleygraph/quad"
+
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/graph/shape"
-	"github.com/cayleygraph/quad"
 )
 
 // join puts two iterators together by intersecting their result sets with an AND
@@ -96,7 +97,6 @@ func mapperMorphism(mappers []shape.ValueMapper) morphism {
 		},
 	}
 }
-
 
 // hasMorphism is the set of nodes that is reachable via either a *Path, a
 // single node.(string) or a list of nodes.([]string).
@@ -266,20 +266,26 @@ func iteratorMorphism(it graph.Iterator) morphism {
 }
 
 // andMorphism sticks a path onto the current iterator chain.
-func andMorphism(p *Path) morphism {
+func andMorphism(p *Path, follow bool) morphism {
 	return morphism{
-		Reversal: func(ctx *pathContext) (morphism, *pathContext) { return andMorphism(p), ctx },
+		Reversal: func(ctx *pathContext) (morphism, *pathContext) { return andMorphism(p, follow), ctx },
 		Apply: func(in shape.Shape, ctx *pathContext) (shape.Shape, *pathContext) {
+			if follow {
+				return join(in, p.ShapeFrom(in)), ctx
+			}
 			return join(in, p.Shape()), ctx
 		},
 	}
 }
 
 // orMorphism is the union, vice intersection, of a path and the current iterator.
-func orMorphism(p *Path) morphism {
+func orMorphism(p *Path, follow bool) morphism {
 	return morphism{
-		Reversal: func(ctx *pathContext) (morphism, *pathContext) { return orMorphism(p), ctx },
+		Reversal: func(ctx *pathContext) (morphism, *pathContext) { return orMorphism(p, follow), ctx },
 		Apply: func(in shape.Shape, ctx *pathContext) (shape.Shape, *pathContext) {
+			if follow {
+				return shape.Union{in, p.ShapeFrom(in)}, ctx
+			}
 			return shape.Union{in, p.Shape()}, ctx
 		},
 	}
@@ -322,10 +328,13 @@ func followRecursiveMorphism(p *Path, maxDepth int, depthTags []string) morphism
 }
 
 // exceptMorphism removes all results on p.(*Path) from the current iterators.
-func exceptMorphism(p *Path) morphism {
+func exceptMorphism(p *Path, follow bool) morphism {
 	return morphism{
-		Reversal: func(ctx *pathContext) (morphism, *pathContext) { return exceptMorphism(p), ctx },
+		Reversal: func(ctx *pathContext) (morphism, *pathContext) { return exceptMorphism(p, follow), ctx },
 		Apply: func(in shape.Shape, ctx *pathContext) (shape.Shape, *pathContext) {
+			if follow {
+				return join(in, shape.Except{From: shape.AllNodes{}, Exclude: p.ShapeFrom(in)}), ctx
+			}
 			return join(in, shape.Except{From: shape.AllNodes{}, Exclude: p.Shape()}), ctx
 		},
 	}
@@ -336,7 +345,7 @@ func uniqueMorphism() morphism {
 	return morphism{
 		Reversal: func(ctx *pathContext) (morphism, *pathContext) { return uniqueMorphism(), ctx },
 		Apply: func(in shape.Shape, ctx *pathContext) (shape.Shape, *pathContext) {
-			return shape.Unique{in}, ctx
+			return shape.Unique{From: in}, ctx
 		},
 	}
 }
@@ -401,7 +410,7 @@ func buildVia(via ...interface{}) shape.Shape {
 	for _, v := range via {
 		qv, ok := quad.AsValue(v)
 		if !ok {
-			panic(fmt.Errorf("Invalid type passed to buildViaPath: %v (%T)", v, v))
+			panic(fmt.Errorf("invalid type passed to buildViaPath: %v (%T)", v, v))
 		}
 		nodes = append(nodes, qv)
 	}

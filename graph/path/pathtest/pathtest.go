@@ -24,13 +24,14 @@ import (
 
 	. "github.com/cayleygraph/cayley/graph/path"
 
+	"github.com/cayleygraph/quad"
+	"github.com/stretchr/testify/require"
+
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/graphtest/testutil"
 	"github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/graph/shape"
 	_ "github.com/cayleygraph/cayley/writer"
-	"github.com/cayleygraph/quad"
-	"github.com/stretchr/testify/require"
 )
 
 // This is a simple test graph.
@@ -192,14 +193,14 @@ func testSet(qs graph.QuadStore) []test {
 		},
 		{
 			message: "And",
-			path: StartPath(qs, vDani).Out(vFollows).And(
-				StartPath(qs, vCharlie).Out(vFollows)),
+			path: StartPath(qs, vDani).Out(vFollows).
+				And(StartPath(qs, vCharlie).Out(vFollows), false),
 			expect: []quad.Value{vBob},
 		},
 		{
 			message: "Or",
-			path: StartPath(qs, vFred).Out(vFollows).Or(
-				StartPath(qs, vAlice).Out(vFollows)),
+			path: StartPath(qs, vFred).Out(vFollows).
+				Or(StartPath(qs, vAlice).Out(vFollows), false),
 			expect: []quad.Value{vBob, vGreg},
 		},
 		{
@@ -225,13 +226,15 @@ func testSet(qs graph.QuadStore) []test {
 		},
 		{
 			message: "Except to filter out a single vertex",
-			path:    StartPath(qs, vAlice, vBob).Except(StartPath(qs, vAlice)),
+			path:    StartPath(qs, vAlice, vBob).Except(StartPath(qs, vAlice), false),
 			expect:  []quad.Value{vBob},
 		},
 		{
 			message: "chained Except",
-			path:    StartPath(qs, vAlice, vBob, vCharlie).Except(StartPath(qs, vBob)).Except(StartPath(qs, vAlice)),
-			expect:  []quad.Value{vCharlie},
+			path: StartPath(qs, vAlice, vBob, vCharlie).
+				Except(StartPath(qs, vBob), false).
+				Except(StartPath(qs, vAlice), false),
+			expect: []quad.Value{vCharlie},
 		},
 		{
 			message: "Unique",
