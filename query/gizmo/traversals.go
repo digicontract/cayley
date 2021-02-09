@@ -1,39 +1,24 @@
-// Copyright 2017 The Cayley Authors. All rights reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package gizmo
 
-// Adds special traversal functions to JS Gizmo objects. Most of these just build the chain of objects, and won't often need the session.
+// Adds special traversal functions to JS Gizmo objects. Most of these just
+// build the chain of objects, and won't often need the session.
 
 import (
-	"errors"
-	"fmt"
+	"regexp"
 
+	"github.com/cayleygraph/quad"
 	"github.com/dop251/goja"
 
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/graph/path"
 	"github.com/cayleygraph/cayley/graph/shape"
-	"github.com/cayleygraph/cayley/query"
-	"github.com/cayleygraph/quad"
 )
 
 // pathObject is a Path object in Gizmo.
 //
-// Both `.Morphism()` and `.Vertex()` create path objects, which provide the following traversal methods.
-// Note that `.Vertex()` returns a query object, which is a subclass of path object.
+// Both `.M()` and `.V()` create path objects, which provide the following
+// traversal methods.
 //
 // For these examples, suppose we have the following graph:
 //
@@ -48,31 +33,32 @@ import (
 //	      \-->| #dani# |------------>+--------+
 //	          +--------+
 //
-// Where every link is a `<follows>` relationship, and the nodes with an extra `#` in the name have an extra `<status>` link. As in,
+// Where every link is a `<follows>` relationship, and the nodes with an extra
+// `#` in the name have an extra `<status>` link. As in,
 //
 //	<dani> -- <status> --> "cool_person"
 //
-// Perhaps these are the influencers in our community. So too are extra `*`s in the name -- these are our smart people,
-// according to the `<smart_graph>` label, eg, the quad:
+// Perhaps these are the influencers in our community. So too are extra `*`s in
+// the name -- these are our smart people, according to the `<smart_graph>`
+// label, eg, the quad:
 //
 //	<greg> <status> "smart_person" <smart_graph> .
 type pathObject struct {
-	s      *Session
-	finals bool
-	path   *path.Path
+	s    *Session
+	path *path.Path
 }
 
 func (p *pathObject) new(np *path.Path) *pathObject {
 	return &pathObject{
-		s:      p.s,
-		finals: p.finals,
-		path:   np,
+		s:    p.s,
+		path: np,
 	}
 }
 
 func (p *pathObject) newVal(np *path.Path) goja.Value {
 	return p.s.vm.ToValue(p.new(np))
 }
+
 func (p *pathObject) clonePath() *path.Path {
 	np := p.path.Clone()
 	// most likely path will be continued, so we'll put non-capped stack slice
@@ -80,6 +66,7 @@ func (p *pathObject) clonePath() *path.Path {
 	p.path, np = np, p.path
 	return np
 }
+
 func (p *pathObject) buildIteratorTree() graph.Iterator {
 	if p.path == nil {
 		return iterator.NewNull()
@@ -87,12 +74,12 @@ func (p *pathObject) buildIteratorTree() graph.Iterator {
 	return p.path.BuildIteratorOn(p.s.qs)
 }
 
-// Filter all paths to ones which, at this point, are on the given node.
-// Signature: (node, [node..])
+// Is filters all paths to ones which, at this point, result are on the given node.
+// Signature: is(...node: Value[]): Path;
 //
 // Arguments:
 //
-// * `node`: A string for a node. Can be repeated or a list of strings.
+// * `node`: A quad.Value, string, boolean, number, or unknown.
 //
 // Example:
 //	// javascript
@@ -102,28 +89,16 @@ func (p *pathObject) buildIteratorTree() graph.Iterator {
 func (p *pathObject) Is(call goja.FunctionCall) goja.Value {
 	args, err := toQuadValues(exportArgs(call.Arguments))
 	if err != nil {
-		return throwErr(p.s.vm, err)
+		panic(p.s.vm.ToValue(err))
 	}
 	np := p.clonePath().Is(args...)
 	return p.newVal(np)
 }
-func (p *pathObject) inout(call goja.FunctionCall, in bool) goja.Value {
-	preds, tags, ok := toViaData(exportArgs(call.Arguments))
-	if !ok {
-		return throwErr(p.s.vm, errNoVia)
-	}
-	np := p.clonePath()
-	if in {
-		np = np.InWithTags(tags, preds...)
-	} else {
-		np = np.OutWithTags(tags, preds...)
-	}
-	return p.newVal(np)
-}
 
 // In is inverse of Out.
-// Starting with the nodes in `path` on the object, follow the quads with predicates defined by `predicatePath` to their subjects.
-// Signature: ([predicatePath], [tags])
+// Starting with the nodes in `path` on the object, follow the quads with
+// predicates defined by `predicatePath` to their subjects.
+// Signature: in(preds: MaybeArray<Path | Value>, ...tags: Tag[]): Path
 //
 // Arguments:
 //
@@ -135,7 +110,8 @@ func (p *pathObject) inout(call goja.FunctionCall, in bool) goja.Value {
 // * `tags` (Optional): One of:
 //   * null or undefined: No tags
 //   * a string: A single tag to add the predicate used to the output set.
-//   * a list of strings: Multiple tags to use as keys to save the predicate used to the output set.
+//   * a list of strings: Multiple tags to use as keys to save the predicate
+//   	used to the output set.
 //
 // Example:
 //
@@ -151,8 +127,9 @@ func (p *pathObject) In(call goja.FunctionCall) goja.Value {
 }
 
 // Out is the work-a-day way to get between nodes, in the forward direction.
-// Starting with the nodes in `path` on the subject, follow the quads with predicates defined by `predicatePath` to their objects.
-// Signature: ([predicatePath], [tags])
+// Starting with the nodes in `path` on the subject, follow the quads with
+// predicates defined by `predicatePath` to their objects.
+// Signature: out(preds: MaybeArray<Path | Value>, ...tags: Tag[]): Path
 //
 // Arguments:
 //
@@ -164,7 +141,8 @@ func (p *pathObject) In(call goja.FunctionCall) goja.Value {
 // * `tags` (Optional): One of:
 //   * null or undefined: No tags
 //   * a string: A single tag to add the predicate used to the output set.
-//   * a list of strings: Multiple tags to use as keys to save the predicate used to the output set.
+//   * a list of strings: Multiple tags to use as keys to save the predicate
+//   	used to the output set.
 //
 // Example:
 //
@@ -185,21 +163,71 @@ func (p *pathObject) Out(call goja.FunctionCall) goja.Value {
 	return p.inout(call, false)
 }
 
+func (p *pathObject) inout(call goja.FunctionCall, in bool) goja.Value {
+	preds, _, ok := toViaData(exportArgs(call.Arguments))
+	if !ok {
+		panic(p.s.vm.ToValue(errNoVia))
+	}
+	np := p.clonePath()
+	if in {
+		np = np.In(preds...)
+	} else {
+		np = np.Out(preds...)
+	}
+	return p.newVal(np)
+}
+
 // Both follow the predicate in either direction. Same as Out or In.
-// Signature: ([predicatePath], [tags])
+// Signature: both(preds: MaybeArray<Path | Value>, ...tags: Tag[]): Path
 //
 // Example:
 //	// javascript
 //	// Find all followers/followees of fred. Returns bob, emily and greg
 //	g.V("<fred>").both("<follows>").all()
 func (p *pathObject) Both(call goja.FunctionCall) goja.Value {
-	preds, tags, ok := toViaData(exportArgs(call.Arguments))
+	preds, _, ok := toViaData(exportArgs(call.Arguments))
 	if !ok {
-		return throwErr(p.s.vm, errNoVia)
+		panic(p.s.vm.ToValue(errNoVia))
 	}
-	np := p.clonePath().BothWithTags(tags, preds...)
+	np := p.clonePath().Both(preds...)
 	return p.newVal(np)
 }
+
+// Follow is the way to use a path prepared with Morphism. Applies the path
+// chain on the morphism object to the current path.
+//
+// Starts as if at the g.M() and follows through the morphism path.
+//
+// Example:
+// 	// javascript:
+//	var friendOfFriend = g.Morphism().Out("<follows>").Out("<follows>")
+//	// Returns the followed people of who charlie follows -- a simplistic
+//	//	"friend of my friend" and whether or not they have a "cool" status.
+//	//	Potential for recommending followers abounds.
+//	// Returns bob and greg
+//	g.V("<charlie>").follow(friendOfFriend).has("<status>", "cool_person").all()
+func (p *pathObject) Follow(path *pathObject) *pathObject {
+	return p.follow(path, false)
+}
+
+// FollowReverse is the same as Follow but follows the chain in the reverse
+// direction. Flips "In" and "Out" where appropriate, the net result being a
+// virtual predicate followed in the reverse direction.
+//
+// Starts at the end of the morphism and follows it backwards (with appropriate
+// flipped directions) to the g.M() location.
+//
+// Example:
+// 	// javascript:
+//	var friendOfFriend = g.Morphism().Out("<follows>").Out("<follows>")
+//	// Returns the third-tier of influencers -- people who follow people who
+//	//	follow the cool people.
+//	// Returns charlie (from bob), charlie (from greg), bob and emily
+//	g.V().has("<status>", "cool_person").followR(friendOfFriend).all()
+func (p *pathObject) FollowReverse(path *pathObject) *pathObject {
+	return p.follow(path, true)
+}
+
 func (p *pathObject) follow(ep *pathObject, rev bool) *pathObject {
 	if ep == nil {
 		return p
@@ -213,39 +241,10 @@ func (p *pathObject) follow(ep *pathObject, rev bool) *pathObject {
 	return p.new(np)
 }
 
-// Follow is the way to use a path prepared with Morphism. Applies the path chain on the morphism object to the current path.
-//
-// Starts as if at the g.M() and follows through the morphism path.
-//
-// Example:
-// 	// javascript:
-//	var friendOfFriend = g.Morphism().Out("<follows>").Out("<follows>")
-//	// Returns the followed people of who charlie follows -- a simplistic "friend of my friend"
-//	// and whether or not they have a "cool" status. Potential for recommending followers abounds.
-//	// Returns bob and greg
-//	g.V("<charlie>").follow(friendOfFriend).has("<status>", "cool_person").all()
-func (p *pathObject) Follow(path *pathObject) *pathObject {
-	return p.follow(path, false)
-}
-
-// FollowR is the same as Follow but follows the chain in the reverse direction. Flips "In" and "Out" where appropriate,
-// the net result being a virtual predicate followed in the reverse direction.
-//
-// Starts at the end of the morphism and follows it backwards (with appropriate flipped directions) to the g.M() location.
-//
-// Example:
-// 	// javascript:
-//	var friendOfFriend = g.Morphism().Out("<follows>").Out("<follows>")
-//	// Returns the third-tier of influencers -- people who follow people who follow the cool people.
-//	// Returns charlie (from bob), charlie (from greg), bob and emily
-//	g.V().has("<status>", "cool_person").followR(friendOfFriend).all()
-func (p *pathObject) FollowR(path *pathObject) *pathObject {
-	return p.follow(path, true)
-}
-
 // FollowRecursive is the same as Follow but follows the chain recursively.
 //
-// Starts as if at the g.M() and follows through the morphism path multiple times, returning all nodes encountered.
+// Starts as if at the g.M() and follows through the morphism path multiple
+// times, returning all nodes encountered.
 //
 // Example:
 // 	// javascript:
@@ -254,20 +253,15 @@ func (p *pathObject) FollowR(path *pathObject) *pathObject {
 //	// Returns bob and dani (from charlie), fred (from bob) and greg (from dani).
 //	g.V("<charlie>").followRecursive(friend).all()
 func (p *pathObject) FollowRecursive(call goja.FunctionCall) goja.Value {
-	preds, maxDepth, tags, ok := toViaDepthData(exportArgs(call.Arguments))
+	preds, maxDepth, _, ok := toViaDepthData(exportArgs(call.Arguments))
 	if !ok || len(preds) == 0 {
-		return throwErr(p.s.vm, errNoVia)
+		panic(p.s.vm.ToValue(errNoVia))
 	} else if len(preds) != 1 {
-		return throwErr(p.s.vm, fmt.Errorf("expected one predicate or path for recursive follow"))
+		panic(p.s.vm.ToValue("expected one predicate or path for recursive follow"))
 	}
 	np := p.clonePath()
-	np = np.FollowRecursive(preds[0], maxDepth, tags)
+	np = np.FollowRecursive(preds[0], maxDepth, []string{})
 	return p.newVal(np)
-}
-
-// And is an alias for Intersect.
-func (p *pathObject) And(path *pathObject) *pathObject {
-	return p.Intersect(path)
 }
 
 // Intersect filters all paths by the result of another query path.
@@ -280,102 +274,75 @@ func (p *pathObject) And(path *pathObject) *pathObject {
 //	// People followed by both charlie (bob and dani) and dani (bob and greg) -- returns bob.
 //	cFollows.Intersect(dFollows).All()
 //	// Equivalently, g.V("<charlie>").Out("<follows>").And(g.V("<dani>").Out("<follows>")).All()
-func (p *pathObject) Intersect(path *pathObject) *pathObject {
-	if path == nil {
-		return p
+func (p *pathObject) Intersect(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 1 && len(args) != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
 	}
-	np := p.clonePath().And(path.path, false)
-	return p.new(np)
+
+	via, ok := args[0].(*path.Path)
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: &pathObject{}, Got: via}))
+	}
+
+	follow := false
+	if len(args) > 1 {
+		follow = toBool(args[1])
+	}
+
+	if via == nil {
+		return p.s.vm.ToValue(p)
+	}
+
+	np := p.clonePath().And(via, follow)
+	return p.newVal(np)
 }
 
 // Union returns the combined paths of the two queries.
 //
-// Notice that it's per-path, not per-node. Once again, if multiple paths reach the same destination,
-// they might have had different ways of getting there (and different tags).
-// See also: `path.Tag()`
+// Notice that it's per-path, not per-node. Once again, if multiple paths reach
+// the same destination, they might have had different ways of getting there
+// (and different tags). See also: `path.Tag()`
 //
 // Example:
 // 	// javascript
 //	var cFollows = g.V("<charlie>").Out("<follows>")
 //	var dFollows = g.V("<dani>").Out("<follows>")
-//	// People followed by both charlie (bob and dani) and dani (bob and greg) -- returns bob (from charlie), dani, bob (from dani), and greg.
+//	// People followed by both charlie (bob and dani) and dani (bob and greg)
+//	//	-- returns bob (from charlie), dani, bob (from dani), and greg.
 //	cFollows.Union(dFollows).All()
-func (p *pathObject) Union(path *pathObject) *pathObject {
-	if path == nil {
-		return p
+func (p *pathObject) Union(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 1 && len(args) != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
 	}
-	np := p.clonePath().Or(path.path, false)
-	return p.new(np)
+
+	via, ok := args[0].(*path.Path)
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: &pathObject{}, Got: via}))
+	}
+
+	follow := false
+	if len(args) > 1 {
+		follow = toBool(args[1])
+	}
+
+	if via == nil {
+		return p.s.vm.ToValue(p)
+	}
+
+	np := p.clonePath().Or(via, follow)
+	return p.newVal(np)
 }
 
-// Or is an alias for Union.
-func (p *pathObject) Or(path *pathObject) *pathObject {
-	return p.Union(path)
-}
-
-// Back returns current path to a set of nodes on a given tag, preserving all constraints.
+// Has filters all paths which are, at this point, on the subject for the given
+// predicate and object, but do not follow the path, merely filter the possible
+// paths.
 //
-// If still valid, a path will now consider their vertex to be the same one as the previously tagged one,
-// with the added constraint that it was valid all the way here.
-// Useful for traversing back in queries and taking another route for things that have matched so far.
+// Usually useful for starting with all nodes, or limiting to a subset
+// depending on some predicate/value pair.
 //
-// Arguments:
-//
-// * `tag`: A previous tag in the query to jump back to.
-//
-// Example:
-// 	// javascript
-//	// Start from all nodes, save them into start, follow any status links,
-//	// jump back to the starting node, and find who follows them. Return the result.
-//	// Results are:
-//	//   {"id": "<alice>", "start": "<bob>"},
-//	//   {"id": "<charlie>", "start": "<bob>"},
-//	//   {"id": "<charlie>", "start": "<dani>"},
-//	//   {"id": "<dani>", "start": "<bob>"},
-//	//   {"id": "<dani>", "start": "<greg>"},
-//	//   {"id": "<dani>", "start": "<greg>"},
-//	//   {"id": "<fred>", "start": "<greg>"},
-//	//   {"id": "<fred>", "start": "<greg>"}
-//	g.V().tag("start").out("<status>").back("start").in("<follows>").all()
-func (p *pathObject) Back(tag string) *pathObject {
-	np := p.clonePath().Back(tag)
-	return p.new(np)
-}
-
-// Tag saves a list of nodes to a given tag.
-//
-// In order to save your work or learn more about how a path got to the end, we have tags.
-// The simplest thing to do is to add a tag anywhere you'd like to put each node in the result set.
-//
-// Arguments:
-//
-// * `tag`: A string or list of strings to act as a result key. The value for tag was the vertex the path was on at the time it reached "Tag"
-// Example:
-// 	// javascript
-//	// Start from all nodes, save them into start, follow any status links, and return the result.
-//	// Results are:
-//	//   {"id": "cool_person", "start": "<bob>"},
-//	//   {"id": "cool_person", "start": "<dani>"},
-//	//   {"id": "cool_person", "start": "<greg>"},
-//	//   {"id": "smart_person", "start": "<emily>"},
-//	//   {"id": "smart_person", "start": "<greg>"}
-//	g.V().tag("start").out("<status>").All()
-func (p *pathObject) Tag(tags ...string) *pathObject {
-	np := p.clonePath().Tag(tags...)
-	return p.new(np)
-}
-
-// As is an alias for Tag.
-func (p *pathObject) As(tags ...string) *pathObject {
-	return p.Tag(tags...)
-}
-
-// Has filters all paths which are, at this point, on the subject for the given predicate and object,
-// but do not follow the path, merely filter the possible paths.
-//
-// Usually useful for starting with all nodes, or limiting to a subset depending on some predicate/value pair.
-//
-// Signature: (predicate, object)
+// Signature: (predicate: Path | Value, ...objs: Value[]): Path
 //
 // Arguments:
 //
@@ -394,14 +361,15 @@ func (p *pathObject) Has(call goja.FunctionCall) goja.Value {
 	return p.has(call, false)
 }
 
-// HasR is the same as Has, but sets constraint in reverse direction.
-func (p *pathObject) HasR(call goja.FunctionCall) goja.Value {
+// HasReverse is the same as Has, but sets constraint in reverse direction.
+func (p *pathObject) HasReverse(call goja.FunctionCall) goja.Value {
 	return p.has(call, true)
 }
+
 func (p *pathObject) has(call goja.FunctionCall, rev bool) goja.Value {
 	args := exportArgs(call.Arguments)
 	if len(args) == 0 {
-		return throwErr(p.s.vm, errArgCount{Got: len(args)})
+		panic(p.s.vm.ToValue(errArgCount{Got: len(args)}))
 	}
 	via := args[0]
 	args = args[1:]
@@ -411,35 +379,12 @@ func (p *pathObject) has(call goja.FunctionCall, rev bool) goja.Value {
 		var err error
 		via, err = toQuadValue(via)
 		if err != nil {
-			return throwErr(p.s.vm, err)
-		}
-	}
-	if len(args) > 0 {
-		var filt []shape.ValueFilter
-	loop:
-		for _, a := range args {
-			switch a := a.(type) {
-			case valFilter:
-				filt = append(filt, a.f)
-			case []valFilter:
-				for _, s := range a {
-					filt = append(filt, s.f)
-				}
-			default:
-				filt = nil
-				// failed to collect all argument as filters - switch back to nodes-only mode
-				break loop
-			}
-		}
-		if len(filt) > 0 {
-			np := p.clonePath()
-			np = np.HasFilter(via, rev, filt...)
-			return p.newVal(np)
+			panic(p.s.vm.ToValue(err))
 		}
 	}
 	qv, err := toQuadValues(args)
 	if err != nil {
-		return throwErr(p.s.vm, err)
+		panic(p.s.vm.ToValue(err))
 	}
 	np := p.clonePath()
 	if rev {
@@ -449,125 +394,49 @@ func (p *pathObject) has(call goja.FunctionCall, rev bool) goja.Value {
 	}
 	return p.newVal(np)
 }
-func (p *pathObject) save(call goja.FunctionCall, rev, opt bool) goja.Value {
-	args := exportArgs(call.Arguments)
-	if len(args) > 2 || len(args) == 0 {
-		return throwErr(p.s.vm, errArgCount{Got: len(args)})
-	}
-	var vtag interface{} = ""
-	if len(args) == 2 {
-		vtag = args[1]
-	}
-	tag, ok := vtag.(string)
-	if !ok {
-		return throwErr(p.s.vm, fmt.Errorf("expected string, got: %T", vtag))
-	}
-	via := args[0]
-	if vp, ok := via.(*pathObject); ok {
-		via = vp.path
-		if tag == "" {
-			return throwErr(p.s.vm, errors.New("must specify a tag name when saving a path"))
-		}
-	} else {
-		qv, err := toQuadValue(via)
-		via = qv
-		if err != nil {
-			return throwErr(p.s.vm, err)
-		}
-		if tag == "" {
-			if p.s.col == query.JSONLD {
-				switch qv := qv.(type) {
-				case quad.IRI:
-					tag = string(qv)
-				case quad.String:
-					tag = string(qv)
-				default:
-					tag = quad.StringOf(qv)
-				}
-			} else {
-				tag = quad.StringOf(qv)
-			}
-		}
-	}
-	np := p.clonePath()
-	if opt {
-		if rev {
-			np = np.SaveOptionalReverse(via, tag)
-		} else {
-			np = np.SaveOptional(via, tag)
-		}
-	} else {
-		if rev {
-			np = np.SaveReverse(via, tag)
-		} else {
-			np = np.Save(via, tag)
-		}
-	}
-	return p.newVal(np)
-}
-
-// Save saves the object of all quads with predicate into tag, without traversal.
-// Signature: (predicate, tag)
-//
-// Arguments:
-//
-// * `predicate`: A string for a predicate node.
-// * `tag`: A string for a tag key to store the object node.
-//
-// Example:
-// 	// javascript
-//	// Start from dani and bob and save who they follow into "target"
-//	// Returns:
-//	//   {"id" : "<bob>", "target": "<fred>" },
-//	//   {"id" : "<dani>", "target": "<bob>" },
-//	//   {"id" : "<dani>", "target": "<greg>" }
-//	g.V("<dani>", "<bob>").Save("<follows>", "target").All()
-func (p *pathObject) Save(call goja.FunctionCall) goja.Value {
-	return p.save(call, false, false)
-}
-
-// SaveR is the same as Save, but tags values via reverse predicate.
-func (p *pathObject) SaveR(call goja.FunctionCall) goja.Value {
-	return p.save(call, true, false)
-}
-
-// SaveOpt is the same as Save, but returns empty tags if predicate does not exists.
-func (p *pathObject) SaveOpt(call goja.FunctionCall) goja.Value {
-	return p.save(call, false, true)
-}
-
-// SaveOptR is the same as SaveOpt, but tags values via reverse predicate.
-func (p *pathObject) SaveOptR(call goja.FunctionCall) goja.Value {
-	return p.save(call, true, true)
-}
 
 // Except removes all paths which match query from current path.
 //
-// In a set-theoretic sense, this is (A - B). While `g.V().Except(path)` to achieve `U - B = !B` is supported, it's often very slow.
+// In a set-theoretic sense, this is (A - B). While `g.V().Except(path)` to
+// achieve `U - B = !B` is supported, it's often very slow.
+//
 // Example:
 // 	// javascript
 //	var cFollows = g.V("<charlie>").Out("<follows>")
 //	var dFollows = g.V("<dani>").Out("<follows>")
-//	// People followed by both charlie (bob and dani) and dani (bob and greg) -- returns bob.
-//	cFollows.Except(dFollows).All()   // The set (dani) -- what charlie follows that dani does not also follow.
+//	// People followed by both charlie (bob and dani) and dani (bob and greg)
+//	//	-- returns bob.
+//	cFollows.Except(dFollows).All()
+// 	// The set (dani) -- what charlie follows that dani does not also follow.
 //	// Equivalently, g.V("<charlie>").Out("<follows>").Except(g.V("<dani>").Out("<follows>")).All()
-func (p *pathObject) Except(path *pathObject) *pathObject {
-	if path == nil {
-		return p
+func (p *pathObject) Except(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 1 && len(args) != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
 	}
-	np := p.clonePath().Except(path.path, false)
-	return p.new(np)
+
+	via, ok := args[0].(*path.Path)
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: &pathObject{}, Got: via}))
+	}
+
+	follow := false
+	if len(args) > 1 {
+		follow = toBool(args[1])
+	}
+
+	if via == nil {
+		return p.s.vm.ToValue(p)
+	}
+
+	np := p.clonePath().Except(via, follow)
+	return p.newVal(np)
 }
 
 // Unique removes duplicate values from the path.
 func (p *pathObject) Unique() *pathObject {
 	np := p.clonePath().Unique()
 	return p.new(np)
-}
-
-// Difference is an alias for Except.
-func (p *pathObject) Difference(path *pathObject) *pathObject {
-	return p.Except(path)
 }
 
 // Labels gets the list of inbound and outbound quad labels
@@ -600,33 +469,9 @@ func (p *pathObject) OutPredicates() *pathObject {
 	return p.new(np)
 }
 
-// SaveInPredicates tags the list of predicates that are pointing in to a node.
-//
-// Example:
-// 	// javascript
-//	// bob only has "<follows>" predicates pointing inward
-//	// returns {"id":"<bob>", "pred":"<follows>"}
-//	g.V("<bob>").SaveInPredicates("pred").All()
-func (p *pathObject) SaveInPredicates(tag string) *pathObject {
-	np := p.clonePath().SavePredicates(true, tag)
-	return p.new(np)
-}
-
-// SaveOutPredicates tags the list of predicates that are pointing out from a node.
-//
-// Example:
-// 	// javascript
-//	// bob has "<follows>" and "<status>" edges pointing outwards
-//	// returns {"id":"<bob>", "pred":"<follows>"}
-//	g.V("<bob>").SaveInPredicates("pred").All()
-func (p *pathObject) SaveOutPredicates(tag string) *pathObject {
-	np := p.clonePath().SavePredicates(false, tag)
-	return p.new(np)
-}
-
 // LabelContext sets (or removes) the subgraph context to consider in the following traversals.
 // Affects all In(), Out(), and Both() calls that follow it. The default LabelContext is null (all subgraphs).
-// Signature: ([labelPath], [tags])
+// Signature: ([labelPath])
 //
 // Arguments:
 //
@@ -635,10 +480,6 @@ func (p *pathObject) SaveOutPredicates(tag string) *pathObject {
 //   * a string: The name of the subgraph to restrict traversals to.
 //   * a list of strings: A set of subgraphs to restrict traversals to.
 //   * a query path object: The target of which is a set of subgraphs.
-// * `tags` (Optional): One of:
-//   * null or undefined: No tags
-//   * a string: A single tag to add the last traversed label to the output set.
-//   * a list of strings: Multiple tags to use as keys to save the label used to the output set.
 //
 // Example:
 // 	// javascript
@@ -649,28 +490,163 @@ func (p *pathObject) SaveOutPredicates(tag string) *pathObject {
 //	// Find all people followed by people with statuses in the smart_graph.
 //	g.V().labelContext("<smart_graph>").in("<status>").labelContext(null).in("<follows>").all()
 func (p *pathObject) LabelContext(call goja.FunctionCall) goja.Value {
-	labels, tags, ok := toViaData(exportArgs(call.Arguments))
+	labels, _, ok := toViaData(exportArgs(call.Arguments))
 	if !ok {
-		return throwErr(p.s.vm, errNoVia)
+		panic(p.s.vm.ToValue(errNoVia))
 	}
-	np := p.clonePath().LabelContextWithTags(tags, labels...)
+	np := p.clonePath().LabelContext(labels...)
 	return p.newVal(np)
 }
 
 // Filter applies constraints to a set of nodes. Can be used to filter values by range or match strings.
-func (p *pathObject) Filter(args ...valFilter) (*pathObject, error) {
-	if len(args) == 0 {
-		return nil, errArgCount{Got: len(args)}
+func (p *pathObject) Filter(call goja.FunctionCall) goja.Value {
+	if n := len(call.Arguments); n != 1 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(call.Arguments)}))
 	}
-	filt := make([]shape.ValueFilter, 0, len(args))
-	for _, f := range args {
-		if f.f == nil {
-			return nil, errors.New("invalid argument type in filter()")
+
+	fn, ok := goja.AssertFunction(call.Argument(0))
+	if !ok {
+		panic(p.s.vm.ToValue("expected callback function"))
+	}
+
+	np := p.clonePath().Filters(filterCallback{sess: p.s, call: call, fn: fn})
+	return p.newVal(np)
+}
+
+// Regex applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Regex(call goja.FunctionCall) goja.Value {
+	if n := len(call.Arguments); n != 1 && n != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(call.Arguments)}))
+	}
+
+	args := exportArgs(call.Arguments)
+	v, err := toQuadValue(args[0])
+	if err != nil {
+		panic(p.s.vm.ToValue(err))
+	}
+	allowRefs := false
+	if len(args) > 1 {
+		b, ok := args[1].(bool)
+		if !ok {
+			panic(p.s.vm.ToValue(errType{Expected: true, Got: args[1]}))
 		}
-		filt = append(filt, f.f)
+		allowRefs = b
 	}
-	np := p.clonePath().Filters(filt...)
-	return p.new(np), nil
+	switch vt := v.(type) {
+	case quad.String:
+		if allowRefs {
+			v = quad.IRI(vt)
+		}
+	case quad.IRI:
+		if !allowRefs {
+			panic(p.s.vm.ToValue(errRegexpOnIRI))
+		}
+	case quad.BNode:
+		if !allowRefs {
+			panic(p.s.vm.ToValue(errRegexpOnIRI))
+		}
+	default:
+		panic(p.s.vm.ToValue(errUnknownType{Val: v}))
+	}
+	var (
+		s    string
+		refs bool
+	)
+	switch v := v.(type) {
+	case quad.String:
+		s = string(v)
+	case quad.IRI:
+		s, refs = string(v), true
+	case quad.BNode:
+		s, refs = string(v), true
+	default:
+		panic(p.s.vm.ToValue(errUnknownType{Val: v}))
+	}
+	re, err := regexp.Compile(s)
+	if err != nil {
+		panic(p.s.vm.ToValue(err))
+	}
+
+	np := p.clonePath().Filters(shape.Regexp{Re: re, Refs: refs})
+	return p.newVal(np)
+}
+
+// Like applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Like(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 1 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
+	}
+	pattern, ok := args[0].(string)
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: "", Got: args[0]}))
+	}
+
+	np := p.clonePath().Filters(shape.Wildcard{Pattern: pattern})
+	return p.newVal(np)
+}
+
+// Compare applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Compare(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) != 2 {
+		panic(p.s.vm.ToValue(errArgCountNum{Expected: 2, Got: len(args)}))
+	}
+
+	op, ok := toInt(args[0])
+	if !ok {
+		panic(p.s.vm.ToValue(errType{Expected: 1, Got: op}))
+	}
+
+	qv, err := toQuadValue(args[1])
+	if err != nil {
+		panic(p.s.vm.ToValue(err))
+	}
+
+	np := p.clonePath().Filters(shape.Comparison{Op: iterator.Operator(op), Val: qv})
+	return p.newVal(np)
+}
+
+// Type applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Type(call goja.FunctionCall) goja.Value {
+	args := exportArgs(call.Arguments)
+	if len(args) == 0 {
+		panic(p.s.vm.ToValue(errArgCount{Got: len(args)}))
+	}
+
+	np := p.clonePath().Filters(filterTypes{types: toStrings(args)})
+	return p.newVal(np)
+}
+
+// Type applies constraints to a set of nodes. Can be used to filter values by range or match strings.
+func (p *pathObject) Literal(_ goja.FunctionCall) goja.Value {
+	np := p.clonePath().Filters(filterTypes{types: []string{"str", "int", "float", "bool", "time", "lang", "typed"}})
+	return p.newVal(np)
+}
+
+// Map calls callback(data) for each result.
+// Signature: (callback)
+//
+// Arguments:
+//
+// * `callback`: A javascript function of the form `function(data)`
+//
+// Example:
+// 	// javascript
+//	// Simulate query.All().All()
+//	graph.V("<alice>").Map(function(d) { return "<bob>" } )
+func (p *pathObject) Map(call goja.FunctionCall) goja.Value {
+	if n := len(call.Arguments); n != 1 {
+		panic(p.s.vm.ToValue(errArgCount{Got: len(call.Arguments)}))
+	}
+
+	fn, ok := goja.AssertFunction(call.Argument(0))
+	if !ok {
+		panic(p.s.vm.ToValue("expected callback function"))
+	}
+
+	np := p.clonePath().Maps(mapperCallback{sess: p.s, call: call, fn: fn})
+	return p.newVal(np)
 }
 
 // Limit limits a number of nodes for current path.
@@ -706,102 +682,4 @@ func (p *pathObject) Skip(offset int) *pathObject {
 func (p *pathObject) Order() *pathObject {
 	np := p.clonePath().Order()
 	return p.new(np)
-}
-
-// Backwards compatibility
-func (p *pathObject) CapitalizedIs(call goja.FunctionCall) goja.Value {
-	return p.Is(call)
-}
-func (p *pathObject) CapitalizedIn(call goja.FunctionCall) goja.Value {
-	return p.In(call)
-}
-func (p *pathObject) CapitalizedOut(call goja.FunctionCall) goja.Value {
-	return p.Out(call)
-}
-func (p *pathObject) CapitalizedBoth(call goja.FunctionCall) goja.Value {
-	return p.Both(call)
-}
-func (p *pathObject) CapitalizedFollow(path *pathObject) *pathObject {
-	return p.Follow(path)
-}
-func (p *pathObject) CapitalizedFollowR(path *pathObject) *pathObject {
-	return p.FollowR(path)
-}
-func (p *pathObject) CapitalizedFollowRecursive(call goja.FunctionCall) goja.Value {
-	return p.FollowRecursive(call)
-}
-func (p *pathObject) CapitalizedAnd(path *pathObject) *pathObject {
-	return p.And(path)
-}
-func (p *pathObject) CapitalizedIntersect(path *pathObject) *pathObject {
-	return p.Intersect(path)
-}
-func (p *pathObject) CapitalizedUnion(path *pathObject) *pathObject {
-	return p.Union(path)
-}
-func (p *pathObject) CapitalizedOr(path *pathObject) *pathObject {
-	return p.Or(path)
-}
-func (p *pathObject) CapitalizedBack(tag string) *pathObject {
-	return p.Back(tag)
-}
-func (p *pathObject) CapitalizedTag(tags ...string) *pathObject {
-	return p.Tag(tags...)
-}
-func (p *pathObject) CapitalizedAs(tags ...string) *pathObject {
-	return p.As(tags...)
-}
-func (p *pathObject) CapitalizedHas(call goja.FunctionCall) goja.Value {
-	return p.Has(call)
-}
-func (p *pathObject) CapitalizedHasR(call goja.FunctionCall) goja.Value {
-	return p.HasR(call)
-}
-func (p *pathObject) CapitalizedSave(call goja.FunctionCall) goja.Value {
-	return p.Save(call)
-}
-func (p *pathObject) CapitalizedSaveR(call goja.FunctionCall) goja.Value {
-	return p.SaveR(call)
-}
-func (p *pathObject) CapitalizedSaveOpt(call goja.FunctionCall) goja.Value {
-	return p.SaveOpt(call)
-}
-func (p *pathObject) CapitalizedSaveOptR(call goja.FunctionCall) goja.Value {
-	return p.SaveOptR(call)
-}
-func (p *pathObject) CapitalizedExcept(path *pathObject) *pathObject {
-	return p.Except(path)
-}
-func (p *pathObject) CapitalizedUnique() *pathObject {
-	return p.Unique()
-}
-func (p *pathObject) CapitalizedDifference(path *pathObject) *pathObject {
-	return p.Difference(path)
-}
-func (p *pathObject) CapitalizedLabels() *pathObject {
-	return p.Labels()
-}
-func (p *pathObject) CapitalizedInPredicates() *pathObject {
-	return p.InPredicates()
-}
-func (p *pathObject) CapitalizedOutPredicates() *pathObject {
-	return p.OutPredicates()
-}
-func (p *pathObject) CapitalizedSaveInPredicates(tag string) *pathObject {
-	return p.SaveInPredicates(tag)
-}
-func (p *pathObject) CapitalizedSaveOutPredicates(tag string) *pathObject {
-	return p.SaveOutPredicates(tag)
-}
-func (p *pathObject) CapitalizedLabelContext(call goja.FunctionCall) goja.Value {
-	return p.LabelContext(call)
-}
-func (p *pathObject) CapitalizedFilter(args ...valFilter) (*pathObject, error) {
-	return p.Filter(args...)
-}
-func (p *pathObject) CapitalizedLimit(limit int) *pathObject {
-	return p.Limit(limit)
-}
-func (p *pathObject) CapitalizedSkip(offset int) *pathObject {
-	return p.Skip(offset)
 }

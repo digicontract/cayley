@@ -1,38 +1,23 @@
-// Copyright 2017 The Cayley Authors. All rights reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package gizmo
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"sort"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/dop251/goja"
+	"github.com/dop251/goja_nodejs/require"
+	"github.com/piprate/json-gold/ld"
+
+	"github.com/cayleygraph/quad"
+	"github.com/cayleygraph/quad/jsonld"
+	"github.com/cayleygraph/quad/voc"
 
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/query"
 	"github.com/cayleygraph/cayley/schema"
-	"github.com/cayleygraph/quad"
-	"github.com/cayleygraph/quad/jsonld"
-	"github.com/cayleygraph/quad/voc"
 )
 
 const Name = "gizmo"
@@ -52,59 +37,46 @@ func init() {
 	})
 }
 
+type Session struct {
+	qs  graph.QuadStore
+	reg *require.Registry
+	vm  *goja.Runtime
+	ns  voc.Namespaces
+	sch *schema.Config
+	col query.Collation
+	ld  *jsonLd
+	log Logger
+
+	last string
+	p    *goja.Program
+
+	err   chan interface{}
+	out   chan *Result
+	ctx   context.Context
+	limit int
+	count int
+
+	shape map[string]interface{}
+}
+
 func NewSession(qs graph.QuadStore) *Session {
 	s := &Session{
 		ctx: context.Background(),
 		sch: schema.NewConfig(),
 		qs:  qs, limit: -1,
 	}
+	s.ld = &jsonLd{
+		s:    s,
+		ld:   ld.NewJsonLdProcessor(),
+		opts: ld.NewJsonLdOptions(""),
+		ctx: map[string]interface{}{
+			"@context": map[string]interface{}{},
+		},
+	}
 	if err := s.buildEnv(); err != nil {
 		panic(err)
 	}
 	return s
-}
-
-func lcFirst(str string) string {
-	rune, size := utf8.DecodeRuneInString(str)
-	return string(unicode.ToLower(rune)) + str[size:]
-}
-
-type fieldNameMapper struct{}
-
-func (fieldNameMapper) FieldName(t reflect.Type, f reflect.StructField) string {
-	return lcFirst(f.Name)
-}
-
-const constructMethodPrefix = "New"
-const backwardsCompatibilityPrefix = "Capitalized"
-
-func (fieldNameMapper) MethodName(t reflect.Type, m reflect.Method) string {
-	if strings.HasPrefix(m.Name, backwardsCompatibilityPrefix) {
-		return strings.TrimPrefix(m.Name, backwardsCompatibilityPrefix)
-	}
-	if strings.HasPrefix(m.Name, constructMethodPrefix) {
-		return strings.TrimPrefix(m.Name, constructMethodPrefix)
-	}
-	return lcFirst(m.Name)
-}
-
-type Session struct {
-	qs  graph.QuadStore
-	vm  *goja.Runtime
-	ns  voc.Namespaces
-	sch *schema.Config
-	col query.Collation
-
-	last string
-	p    *goja.Program
-
-	out   chan *Result
-	ctx   context.Context
-	limit int
-	count int
-
-	err   error
-	shape map[string]interface{}
 }
 
 func (s *Session) context() context.Context {
@@ -115,10 +87,14 @@ func (s *Session) buildEnv() error {
 	if s.vm != nil {
 		return nil
 	}
+
+	s.reg = require.NewRegistry()
 	s.vm = goja.New()
+	s.reg.Enable(s.vm)
 	s.vm.SetFieldNameMapper(fieldNameMapper{})
-	s.vm.Set("graph", &graphObject{s: s})
-	s.vm.Set("g", s.vm.Get("graph"))
+	s.vm.Set("ld", s.ld)
+	s.vm.Set("ns", &namespaces{s: s})
+	s.vm.Set("g", &graphObject{s: s})
 	for name, val := range defaultEnv {
 		fnc := val
 		s.vm.Set(name, func(call goja.FunctionCall) goja.Value {
@@ -132,9 +108,14 @@ func (s *Session) quadValueToNative(v quad.Value) interface{} {
 	if v == nil {
 		return nil
 	}
-	if s.col == query.JSONLD {
+
+	switch s.col {
+	case query.JSON:
+		return v
+	case query.JSONLD:
 		return jsonld.FromValue(v)
 	}
+
 	out := v.Native()
 	if nv, ok := out.(quad.Value); ok && v == nv {
 		return quad.StringOf(v)
@@ -154,6 +135,7 @@ func (s *Session) tagsToValueMap(m map[string]graph.Ref) map[string]interface{} 
 	}
 	return outputMap
 }
+
 func (s *Session) runIteratorToArray(it graph.Iterator, limit int) ([]map[string]interface{}, error) {
 	ctx := s.context()
 
@@ -194,12 +176,8 @@ func (s *Session) runIteratorWithCallback(it graph.Iterator, callback goja.Value
 	ctx, cancel := context.WithCancel(s.context())
 	defer cancel()
 	var gerr error
-	err := graph.Iterate(ctx, it).Paths(true).Limit(limit).TagEach(func(tags map[string]graph.Ref) {
-		tm := s.tagsToValueMap(tags)
-		if tm == nil {
-			return
-		}
-		if _, err := fnc(this.This, s.vm.ToValue(tm)); err != nil {
+	err := graph.Iterate(ctx, it).Paths(false).Limit(limit).EachValue(s.qs, func(v quad.Value) {
+		if _, err := fnc(this.This, s.vm.ToValue(v)); err != nil {
 			gerr = err
 			cancel()
 		}
@@ -208,6 +186,18 @@ func (s *Session) runIteratorWithCallback(it graph.Iterator, callback goja.Value
 		err = gerr
 	}
 	return err
+}
+
+func (s *Session) error(err interface{}) bool {
+	if s.err == nil {
+		return false
+	}
+	select {
+	case s.err <- err:
+	case <-s.ctx.Done():
+		return false
+	}
+	return true
 }
 
 func (s *Session) send(ctx context.Context, r *Result) bool {
@@ -286,15 +276,6 @@ func (s *Session) compile(qu string) error {
 	return nil
 }
 
-func (s *Session) run() (goja.Value, error) {
-	v, err := s.vm.RunProgram(s.p)
-	if e, ok := err.(*goja.Exception); ok && e.Value() != nil {
-		if er, ok := e.Value().Export().(error); ok {
-			err = er
-		}
-	}
-	return v, err
-}
 func (s *Session) Execute(ctx context.Context, qu string, opt query.Options) (query.Iterator, error) {
 	switch opt.Collation {
 	case query.Raw, query.JSON, query.JSONLD, query.REPL:
@@ -325,7 +306,7 @@ type results struct {
 	running bool
 	errc    chan error
 
-	err error
+	err []interface{}
 	cur *Result
 }
 
@@ -341,11 +322,12 @@ func (it *results) stop(err error) {
 func (it *results) Next(ctx context.Context) bool {
 	if it.errc == nil {
 		it.s.out = make(chan *Result)
+		it.s.err = make(chan interface{}, 1)
 		it.errc = make(chan error, 1)
 		it.running = true
 		go func() {
 			defer close(it.errc)
-			v, err := it.s.run()
+			v, err := it.s.vm.RunProgram(it.s.p)
 			if err != nil {
 				it.errc <- err
 				return
@@ -356,17 +338,29 @@ func (it *results) Next(ctx context.Context) bool {
 		}()
 	}
 	select {
-	case r := <-it.s.out:
-		it.cur = r
+	case cur := <-it.s.out:
+		it.cur = cur
+		return true
+	case err := <-it.s.err:
+		it.err = append(it.err, err)
+		it.cur = nil
 		return true
 	case err := <-it.errc:
+		select {
+		case cur := <-it.s.out:
+			it.cur = cur
+		case err := <-it.s.err:
+			it.err = append(it.err, err)
+		default:
+		}
+
 		if err != nil {
-			it.err = err
+			it.err = append(it.err, err)
 		}
 		return false
 	case <-ctx.Done():
-		it.err = ctx.Err()
-		it.stop(it.err)
+		it.err = append(it.err, ctx.Err())
+		it.stop(ctx.Err())
 		return false
 	}
 }
@@ -459,7 +453,7 @@ func (it *results) replResult() interface{} {
 }
 
 func (it *results) Err() error {
-	return it.err
+	return &Error{Errors: it.err}
 }
 
 func (it *results) Close() error {
@@ -475,7 +469,7 @@ func (s *Session) ShapeOf(qu string) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.run()
+	_, err = s.vm.RunProgram(s.p)
 	out := s.shape
 	s.shape = nil
 	return out, err

@@ -1,33 +1,16 @@
-// Copyright 2017 The Cayley Authors. All rights reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package gizmo
 
 // Builds a new Gizmo environment pointing at a session.
 
 import (
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/dop251/goja"
 
-	"github.com/cayleygraph/cayley/graph/iterator"
-	"github.com/cayleygraph/cayley/graph/path"
-	"github.com/cayleygraph/cayley/graph/shape"
 	"github.com/cayleygraph/quad"
-	"github.com/cayleygraph/quad/voc"
+
+	"github.com/cayleygraph/cayley/graph/path"
 )
 
 // graphObject is a root graph object.
@@ -41,31 +24,6 @@ type graphObject struct {
 	s *Session
 }
 
-// Uri creates an IRI values from a given string.
-func (g *graphObject) NewIRI(s string) quad.IRI {
-	return quad.IRI(g.s.ns.FullIRI(s))
-}
-
-// AddNamespace associates prefix with a given IRI namespace.
-func (g *graphObject) AddNamespace(pref, ns string) {
-	g.s.ns.Register(voc.Namespace{Prefix: pref + ":", Full: ns})
-}
-
-// AddDefaultNamespaces register all default namespaces for automatic IRI resolution.
-func (g *graphObject) AddDefaultNamespaces() {
-	voc.CloneTo(&g.s.ns)
-}
-
-// LoadNamespaces loads all namespaces saved to graph.
-func (g *graphObject) LoadNamespaces() error {
-	return g.s.sch.LoadNamespaces(g.s.ctx, g.s.qs, &g.s.ns)
-}
-
-// V is a shorthand for Vertex.
-func (g *graphObject) NewV(call goja.FunctionCall) goja.Value {
-	return g.NewVertex(call)
-}
-
 // Vertex starts a query path at the given vertex/vertices. No ids means "all vertices".
 // Signature: ([nodeId],[nodeId]...)
 //
@@ -74,21 +32,16 @@ func (g *graphObject) NewV(call goja.FunctionCall) goja.Value {
 // * `nodeId` (Optional): A string or list of strings representing the starting vertices.
 //
 // Returns: Path object
-func (g *graphObject) NewVertex(call goja.FunctionCall) goja.Value {
+func (g *graphObject) NewV(call goja.FunctionCall) goja.Value {
 	qv, err := toQuadValues(exportArgs(call.Arguments))
 	if err != nil {
-		return throwErr(g.s.vm, err)
+		panic(g.s.vm.ToValue(err))
 	}
-	return g.s.vm.ToValue(&pathObject{
-		s:      g.s,
-		finals: true,
-		path:   path.StartMorphism(qv...),
-	})
-}
 
-// M is a shorthand for Morphism.
-func (g *graphObject) NewM() *pathObject {
-	return g.NewMorphism()
+	return g.s.vm.ToValue(&pathObject{
+		s:    g.s,
+		path: path.StartMorphism(qv...),
+	})
 }
 
 // Morphism creates a morphism path object. Unqueryable on it's own, defines one end of the path.
@@ -98,11 +51,11 @@ func (g *graphObject) NewM() *pathObject {
 //	var shorterPath = graph.Morphism().out("foo").out("bar")
 //
 // is the common use case. See also: path.follow(), path.followR().
-func (g *graphObject) NewMorphism() *pathObject {
-	return &pathObject{
+func (g *graphObject) NewM() goja.Value {
+	return g.s.vm.ToValue(&pathObject{
 		s:    g.s,
 		path: path.StartMorphism(),
-	}
+	})
 }
 
 // Emit adds data programmatically to the JSON result list. Can be any JSON type.
@@ -120,146 +73,147 @@ func (g *graphObject) Emit(call goja.FunctionCall) goja.Value {
 	return goja.Null()
 }
 
-// Backwards compatibility
-func (g *graphObject) CapitalizedUri(s string) quad.IRI {
-	return g.NewIRI(s)
-}
-func (g *graphObject) CapitalizedAddNamespace(pref, ns string) {
-	g.AddNamespace(pref, ns)
-}
-func (g *graphObject) CapitalizedAddDefaultNamespaces() {
-	g.AddDefaultNamespaces()
-}
-func (g *graphObject) CapitalizedLoadNamespaces() error {
-	return g.LoadNamespaces()
-}
-func (g *graphObject) CapitalizedEmit(call goja.FunctionCall) goja.Value {
-	return g.Emit(call)
+var defaultEnv = map[string]func(vm *goja.Runtime, call goja.FunctionCall) goja.Value{
+	"type":  q1value(typeCheck),
+	"iri":   s1string(func(s string) quad.Value { return quad.IRI(s) }),
+	"bnode": s1string(func(s string) quad.Value { return quad.BNode(s) }),
+	"str":   s1string(func(s string) quad.Value { return quad.String(s) }),
+	"int":   s1int(func(s int64) quad.Value { return quad.Int(s) }),
+	"float": s1float(func(s float64) quad.Value { return quad.Float(s) }),
+	"bool":  s1bool(func(s bool) quad.Value { return quad.Bool(s) }),
+	"time":  s1date(func(s time.Time) quad.Value { return quad.Time(s) }),
+	"lang": s1string۰s2string(func(s, lang string) quad.Value {
+		return quad.LangString{Value: quad.String(s), Lang: lang}
+	}),
+	"typed": s1string۰q1iri(func(s string, typ quad.IRI) quad.Value {
+		return quad.TypedString{Value: quad.String(s), Type: typ}
+	}),
 }
 
-func oneStringType(fnc func(s string) quad.Value) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-		args := toStrings(exportArgs(call.Arguments))
-		if len(args) != 1 {
-			return throwErr(vm, errArgCount2{Expected: 1, Got: len(args)})
-		}
-		return vm.ToValue(fnc(args[0]))
+func typeCheck(s quad.Value) string {
+	switch s.(type) {
+	case quad.IRI:
+		return "iri"
+	case quad.BNode:
+		return "bnode"
+	case quad.String:
+		return "str"
+	case quad.Int:
+		return "int"
+	case quad.Float:
+		return "float"
+	case quad.Bool:
+		return "bool"
+	case quad.Time:
+		return "time"
+	case quad.LangString:
+		return "lang"
+	case quad.TypedString:
+		return "typed"
+	default:
+		return "unknown"
 	}
 }
 
-func twoStringType(fnc func(s1, s2 string) quad.Value) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-		args := toStrings(exportArgs(call.Arguments))
-		if len(args) != 2 {
-			return throwErr(vm, errArgCount2{Expected: 2, Got: len(args)})
-		}
-		return vm.ToValue(fnc(args[0], args[1]))
-	}
-}
-
-func cmpOpType(op iterator.Operator) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+func q1value(fn func(q1 quad.Value) string) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 		args := exportArgs(call.Arguments)
 		if len(args) != 1 {
-			return throwErr(vm, errArgCount2{Expected: 1, Got: len(args)})
+			panic(vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
 		}
-		qv, err := toQuadValue(args[0])
+
+		v, err := toQuadValue(args[0])
 		if err != nil {
-			return throwErr(vm, err)
+			panic(vm.ToValue(err))
 		}
-		return vm.ToValue(valFilter{f: shape.Comparison{Op: op, Val: qv}})
+
+		return vm.ToValue(fn(v))
 	}
 }
 
-func cmpWildcard(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-	args := exportArgs(call.Arguments)
-	if len(args) != 1 {
-		return throwErr(vm, errArgCount2{Expected: 1, Got: len(args)})
+func s1string(fn func(s string) quad.Value) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+		args := toStrings(exportArgs(call.Arguments))
+		if len(args) != 1 {
+			panic(vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
+		}
+		return vm.ToValue(fn(args[0]))
 	}
-	pattern, ok := args[0].(string)
-	if !ok {
-		return throwErr(vm, fmt.Errorf("wildcard: unsupported type: %T", args[0]))
-	}
-	return vm.ToValue(valFilter{f: shape.Wildcard{Pattern: pattern}})
 }
 
-func cmpRegexp(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
-	args := exportArgs(call.Arguments)
-	if len(args) != 1 && len(args) != 2 {
-		return throwErr(vm, errArgCount2{Expected: 1, Got: len(args)})
+func s1int(fn func(s int64) quad.Value) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+		args := toInts(exportArgs(call.Arguments))
+		if len(args) != 1 {
+			panic(vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
+		}
+		return vm.ToValue(fn(args[0]))
 	}
-	v, err := toQuadValue(args[0])
-	if err != nil {
-		return throwErr(vm, err)
+}
+
+func s1float(fn func(s float64) quad.Value) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+		args := toFloats(exportArgs(call.Arguments))
+		if len(args) != 1 {
+			panic(vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
+		}
+		return vm.ToValue(fn(args[0]))
 	}
-	allowRefs := false
-	if len(args) > 1 {
-		b, ok := args[1].(bool)
+}
+
+func s1bool(fn func(s bool) quad.Value) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+		args := toBools(exportArgs(call.Arguments))
+		if len(args) != 1 {
+			panic(vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
+		}
+		return vm.ToValue(fn(args[0]))
+	}
+}
+
+func s1date(fn func(s time.Time) quad.Value) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+		args, err := toDates(exportArgs(call.Arguments))
+		if err != nil {
+			panic(vm.ToValue(err))
+		}
+
+		if len(args) != 1 {
+			panic(vm.ToValue(errArgCountNum{Expected: 1, Got: len(args)}))
+		}
+		return vm.ToValue(fn(args[0]))
+	}
+}
+
+func s1string۰s2string(fn func(s1, s2 string) quad.Value) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+		args := toStrings(exportArgs(call.Arguments))
+		if len(args) != 2 {
+			panic(vm.ToValue(errArgCountNum{Expected: 2, Got: len(args)}))
+		}
+		return vm.ToValue(fn(args[0], args[1]))
+	}
+}
+
+func s1string۰q1iri(fn func(s1 string, q1 quad.IRI) quad.Value) func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+	return func(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+		args := toStrings(exportArgs(call.Arguments))
+		if len(args) != 2 {
+			panic(vm.ToValue(errArgCountNum{Expected: 2, Got: len(args)}))
+		}
+
+		v, err := toQuadValue(args[1])
+		if err != nil {
+			panic(vm.ToValue(err))
+		}
+
+		vt, ok := v.(quad.IRI)
 		if !ok {
-			return throwErr(vm, fmt.Errorf("expected bool as second argument"))
+			panic(vm.ToValue(errType{Expected: quad.IRI(""), Got: v}))
 		}
-		allowRefs = b
-	}
-	switch vt := v.(type) {
-	case quad.String:
-		if allowRefs {
-			v = quad.IRI(string(vt))
-		}
-	case quad.IRI:
-		if !allowRefs {
-			return throwErr(vm, errRegexpOnIRI)
-		}
-	case quad.BNode:
-		if !allowRefs {
-			return throwErr(vm, errRegexpOnIRI)
-		}
-	default:
-		return throwErr(vm, fmt.Errorf("regexp: unsupported type: %T", v))
-	}
-	var (
-		s    string
-		refs bool
-	)
-	switch v := v.(type) {
-	case quad.String:
-		s = string(v)
-	case quad.IRI:
-		s, refs = string(v), true
-	case quad.BNode:
-		s, refs = string(v), true
-	default:
-		return throwErr(vm, fmt.Errorf("regexp from non-string value: %T", v))
-	}
-	re, err := regexp.Compile(string(s))
-	if err != nil {
-		return throwErr(vm, err)
-	}
-	return vm.ToValue(valFilter{f: shape.Regexp{Re: re, Refs: refs}})
-}
 
-type valFilter struct {
-	f shape.ValueFilter
-}
-
-var defaultEnv = map[string]func(vm *goja.Runtime, call goja.FunctionCall) goja.Value{
-	"iri":   oneStringType(func(s string) quad.Value { return quad.IRI(s) }),
-	"bnode": oneStringType(func(s string) quad.Value { return quad.BNode(s) }),
-	"raw":   oneStringType(func(s string) quad.Value { return quad.Raw(s) }),
-	"str":   oneStringType(func(s string) quad.Value { return quad.String(s) }),
-
-	"lang": twoStringType(func(s, lang string) quad.Value {
-		return quad.LangString{Value: quad.String(s), Lang: lang}
-	}),
-	"typed": twoStringType(func(s, typ string) quad.Value {
-		return quad.TypedString{Value: quad.String(s), Type: quad.IRI(typ)}
-	}),
-
-	"lt":    cmpOpType(iterator.CompareLT),
-	"lte":   cmpOpType(iterator.CompareLTE),
-	"gt":    cmpOpType(iterator.CompareGT),
-	"gte":   cmpOpType(iterator.CompareGTE),
-	"regex": cmpRegexp,
-	"like":  cmpWildcard,
+		return vm.ToValue(fn(args[0], vt))
+	}
 }
 
 func unwrap(o interface{}) interface{} {
@@ -296,11 +250,122 @@ func toInt(o interface{}) (int, bool) {
 		return v, true
 	case int64:
 		return int(v), true
-	case float64:
-		return int(v), true
 	default:
 		return 0, false
 	}
+}
+
+func toInts(objs []interface{}) []int64 {
+	if len(objs) == 0 {
+		return nil
+	}
+	var out = make([]int64, 0, len(objs))
+	for _, o := range objs {
+		switch v := o.(type) {
+		case int:
+			out = append(out, int64(v))
+		case int64:
+			out = append(out, v)
+		case []int:
+			for _, e := range v {
+				out = append(out, int64(e))
+			}
+		case []int64:
+			out = append(out, v...)
+		case []interface{}:
+			out = append(out, toInts(v)...)
+		default:
+			panic(fmt.Errorf("expected int, got: %T", o))
+		}
+	}
+	return out
+}
+
+func toFloats(objs []interface{}) []float64 {
+	if len(objs) == 0 {
+		return nil
+	}
+	var out = make([]float64, 0, len(objs))
+	for _, o := range objs {
+		switch v := o.(type) {
+		case float32:
+			out = append(out, float64(v))
+		case float64:
+			out = append(out, v)
+		case []float32:
+			for _, e := range v {
+				out = append(out, float64(e))
+			}
+		case []float64:
+			out = append(out, v...)
+		case []interface{}:
+			out = append(out, toFloats(v)...)
+		default:
+			panic(fmt.Errorf("expected float, got: %T", o))
+		}
+	}
+	return out
+}
+
+func toBool(o interface{}) bool {
+	if val, ok := o.(bool); ok {
+		return val
+	}
+	return false
+}
+
+func toBools(objs []interface{}) []bool {
+	if len(objs) == 0 {
+		return nil
+	}
+	var out = make([]bool, 0, len(objs))
+	for _, o := range objs {
+		switch v := o.(type) {
+		case bool:
+			out = append(out, v)
+		case []bool:
+			out = append(out, v...)
+		case []interface{}:
+			out = append(out, toBools(v)...)
+		default:
+			panic(fmt.Errorf("expected bool, got: %T", o))
+		}
+	}
+	return out
+}
+
+func toDates(objs []interface{}) ([]time.Time, error) {
+	if len(objs) == 0 {
+		return []time.Time{}, nil
+	}
+	var out = make([]time.Time, 0, len(objs))
+	for _, o := range objs {
+		switch v := o.(type) {
+		case string:
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, t)
+		case []string:
+			for _, e := range v {
+				t, err := time.Parse(time.RFC3339, e)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, t)
+			}
+		case []interface{}:
+			ts, err := toDates(v)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ts...)
+		default:
+			panic(fmt.Errorf("expected date, got: %T", o))
+		}
+	}
+	return out, nil
 }
 
 func toQuadValue(o interface{}) (quad.Value, error) {
@@ -424,8 +489,4 @@ func toViaDepthData(objs []interface{}) (predicates []interface{}, maxDepth int,
 	}
 	ok = true
 	return
-}
-
-func throwErr(vm *goja.Runtime, err error) goja.Value {
-	panic(vm.ToValue(err))
 }

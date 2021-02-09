@@ -15,7 +15,8 @@ require (
 	github.com/dlclark/regexp2 v1.1.4 // indirect
 	github.com/docker/docker v0.7.3-0.20180412203414-a422774e593b // indirect
 	github.com/docker/go-units v0.4.0 // indirect
-	github.com/dop251/goja v0.0.0-20190105122144-6d5bf35058fa
+	github.com/dop251/goja v0.0.0-20210125133538-084ecb42b053
+	github.com/dop251/goja_nodejs v0.0.0-20201222133159-1629e8d0b836
 	github.com/flimzy/diff v0.1.6 // indirect
 	github.com/fsouza/go-dockerclient v1.2.2
 	github.com/go-sourcemap/sourcemap v2.1.2+incompatible // indirect
@@ -25,6 +26,7 @@ require (
 	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
 	github.com/google/go-cmp v0.3.0 // indirect
 	github.com/gopherjs/gopherjs v0.0.0-20190430165422-3e4dfb77656c // indirect
+	github.com/hashicorp/go-multierror v1.1.0
 	github.com/hidal-go/hidalgo v0.0.0-20190814174001-42e03f3b5eaa
 	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
 	github.com/jackc/pgx v3.3.0+incompatible
@@ -36,6 +38,7 @@ require (
 	github.com/opencontainers/selinux v1.0.0 // indirect
 	github.com/pelletier/go-toml v1.4.0 // indirect
 	github.com/peterh/liner v0.0.0-20170317030525-88609521dc4b
+	github.com/piprate/json-gold v0.3.0
 	github.com/prometheus/client_golang v0.9.3
 	github.com/rogpeppe/go-internal v1.5.0 // indirect
 	github.com/russross/blackfriday v1.5.2

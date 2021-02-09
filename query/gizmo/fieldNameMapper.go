@@ -1,4 +1,4 @@
-package gizmopp
+package gizmo
 
 import (
 	"reflect"
